@@ -1,4 +1,4 @@
-import machine, time, ntptime, os, statistics
+import machine, time, ntptime, os
 import esp32, network, onewire
 import ds18x20 as OW_SENSOR
 from machine import Pin, I2C, RTC
@@ -16,7 +16,11 @@ LOAD_RELAY_PIN = 5
 ### PARAMETERS ###
 UTC_OFFSET = 60 * 60 * 10
 MAX_LOG_FILES = 14
-SLEEP_MINUTES = 15
+SLEEP_MINUTES = 1
+AVERAGE_READS = 4
+OFF_READ_INTERVAL = 15
+ON_READ_INTERVAL = 30
+### SETPOINTS ###
 OUTSIDE_TEMP_LOW = 12
 OUTSIDE_TEMP_HIGH = 16
 INSIDE_TEMP_LOW = 12
@@ -88,6 +92,7 @@ def log():
     logline = (f"{_actual_inside_temp:.1f},{_actual_outside_temp:.1f},{_actual_outside_humi:.1f},{_actual_heater_status},{_sleep_duration},{esp32.mcu_temperature():.1f}")
     with open(filename, "a") as text_file:
         text_file.write(f"{timestamp},{(str(logline))} \n")
+    print(f"{timestamp},{(str(logline))} ")
 
 def close_relay():
     global _actual_heater_status
@@ -106,59 +111,62 @@ def open_relay():
 def go_to_sleep():
     global _sleep_duration
     sleeptime = time.time()
-    log()
     disconnect_wifi()
+    led.off()
     machine.lightsleep(int(SLEEP_MINUTES * 1000 * 60))
     awaketime = time.time()
     _sleep_duration = int(awaketime - sleeptime)
-    connect_wifi()
     log()
-    sleeptime = 0
-    awaketime = 0
+    connect_wifi()
+    _sleep_duration = 0
 
 def off_loop():
     global _loop_state, _sleep_duration, _actual_inside_temp, _actual_outside_temp, _actual_outside_humi
     open_relay()
+    outside_ave = []
+    inside_ave = []
     while True:
         ow_sensor_bus.convert_temp()
-        time.sleep_ms(800)
+        time.sleep(1)
         _actual_outside_temp, _actual_outside_humi = i2c_sensor.get_CHT8305_TEMPERATURE_HUMIDITY()
         for UID in ow_sensor_array:
             _actual_inside_temp = ow_sensor_bus.read_temp(UID)
+        outside_ave.append(_actual_outside_temp)
+        inside_ave.append(_actual_inside_temp)
         log()
-        _outside_ave.append(_actual_outside_temp)
-        _inside_ave.append(_actual_inside_temp)
-        if (len(_outside_ave)) >= 3 or (len(_inside_ave)) >= 3:
-            outside_mean = int(statistics.fmean(_outside_ave))
-            inside_mean = int(statistics.fmean(_inside_ave))
-            _outside_ave = []
-            _inside_ave = []
+        if (len(outside_ave)) >= AVERAGE_READS or (len(inside_ave)) >= AVERAGE_READS:
+            outside_mean = int((sum(outside_ave)) / (len(outside_ave)))
+            inside_mean = int((sum(inside_ave)) / (len(inside_ave)))
+            outside_ave = []
+            inside_ave = []
             if (outside_mean <= OUTSIDE_TEMP_LOW) or (inside_mean <= INSIDE_TEMP_LOW):
                 _loop_state = 1
             else:
                 go_to_sleep()
-        yield 9
+        yield OFF_READ_INTERVAL
 
 def on_loop():
-    global _loop_state, _sleep_duration, _actual_inside_temp, _actual_outside_temp, _actual_outside_humi
+    global _loop_state, _actual_inside_temp, _actual_outside_temp, _actual_outside_humi
     close_relay()
+    outside_ave = []
+    inside_ave = []
     while True:
         ow_sensor_bus.convert_temp()
-        time.sleep_ms(800)
+        time.sleep(1)
         _actual_outside_temp, _actual_outside_humi = i2c_sensor.get_CHT8305_TEMPERATURE_HUMIDITY()
         for UID in ow_sensor_array:
             _actual_inside_temp = ow_sensor_bus.read_temp(UID)
+        outside_ave.append(_actual_outside_temp)
+        inside_ave.append(_actual_inside_temp)
         log()
-        _outside_ave.append(_actual_outside_temp)
-        _inside_ave.append(_actual_inside_temp)
-        if (len(_outside_ave)) >= 3 or (len(_inside_ave)) >= 3:
-            outside_mean = int(statistics.fmean(_outside_ave))
-            inside_mean = int(statistics.fmean(_inside_ave))
-            _outside_ave = []
-            _inside_ave = []
+        if (len(outside_ave)) >= AVERAGE_READS or (len(inside_ave)) >= AVERAGE_READS:
+            outside_mean = int((sum(outside_ave)) / (len(outside_ave)))
+            inside_mean = int((sum(inside_ave)) / (len(inside_ave)))
+            outside_ave = []
+            inside_ave = []
             if (outside_mean >= OUTSIDE_TEMP_HIGH) or (inside_mean >= INSIDE_TEMP_HIGH):
                 _loop_state = 0
-        yield 30
+        yield ON_READ_INTERVAL
 
 ### HOUSEKEEPING ###
 # ## WIFI ##
@@ -183,7 +191,12 @@ current_loop = 0
 while True:
     try:
         interval = next(state)
-        time.sleep(interval)
+        # time.sleep(interval)
+        #
+        for i in range(int(interval)):
+            blink_led()
+            time.sleep(1)
+        #
         if _loop_state != current_loop:
             current_loop = _loop_state
             if current_loop == 0:
