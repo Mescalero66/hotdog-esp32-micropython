@@ -209,8 +209,5 @@ __marimo__/
 # Wifi Passwords
 wlan_key.py
 
-# Location Input
-geohash.py
-
 #icons
 icons/

@@ -3,11 +3,12 @@ import esp32, network, onewire
 import ds18x20 as OW_SENSOR
 from machine import Pin, I2C, RTC
 from hardware.CHT8305 import I2C_CHT8305 as I2C_SENSOR
-# import hardware.WLAN_KEY as wlan_key
+import hardware.WLAN_KEY as wlan_key
 
+### WIFI ###
+WIFI_SSID = wlan_key.ssid
+WIFI_PW = wlan_key.password
 ### CONSTANTS ###
-# WIFI_SSID = wlan_key.ssid
-# WIFI_PW = wlan_key.password
 BLUE_LED = 8
 SDA_PIN = 6
 SCL_PIN = 7
@@ -117,8 +118,8 @@ def go_to_sleep():
     awaketime = time.time()
     _sleep_duration = int(awaketime - sleeptime)
     log()
-    connect_wifi()
     _sleep_duration = 0
+    connect_wifi()    
 
 def off_loop():
     global _loop_state, _sleep_duration, _actual_inside_temp, _actual_outside_temp, _actual_outside_humi
@@ -169,21 +170,21 @@ def on_loop():
         yield ON_READ_INTERVAL
 
 ### HOUSEKEEPING ###
-# ## WIFI ##
-# wlan.active(False)
-# wlan.active(True)
-# wlan.configs(reconnects=3)
-# if not wlan.isconnected():
-#     print('connecting to network...')
-#     wlan.connect(WIFI_SSID, WIFI_PW)
-#     print("connection status:", wlan.status())
-#     print('network config:', wlan.ipconfig('addr4'))
-# ## CLOCK ##
-# if time.localtime()[0] < 2024:
-#     ntptime.settime()
-#     local_time = time.localtime(time.time() + UTC_OFFSET)
-#     real_time_clock.datetime(local_time)
-# print(time.localtime())
+## WIFI ##
+wlan.active(False)
+wlan.active(True)
+wlan.config(reconnects=3)
+if not wlan.isconnected():
+    print('connecting to network...')
+    wlan.connect(WIFI_SSID, WIFI_PW)
+    print("connection status:", wlan.status())
+    print('network config:', wlan.ipconfig('addr4'))
+## CLOCK ##
+if time.localtime()[0] < 2024:
+    ntptime.settime()
+    local_time = time.localtime(time.time() + UTC_OFFSET)
+    real_time_clock.datetime(local_time)
+
 
 state = off_loop()
 current_loop = 0
