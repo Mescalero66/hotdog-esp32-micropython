@@ -1,4 +1,4 @@
-import machine, time, ntptime, os
+import machine, time, ntptime, os, statistics
 import esp32, network, onewire
 import ds18x20 as OW_SENSOR
 from machine import Pin, I2C, RTC
@@ -17,10 +17,11 @@ LOAD_RELAY_PIN = 5
 UTC_OFFSET = 60 * 60 * 10
 SLEEP_MINUTES = 15
 OUTSIDE_TEMP_LOW = 12
-OUTSIDE_TEMP_HIGH = 15
+OUTSIDE_TEMP_HIGH = 16
 INSIDE_TEMP_LOW = 12
-INSIDE_TEMP_HIGH = 20
+INSIDE_TEMP_HIGH = 21
 ### VARIABLES ###
+_loop_state = 0
 _current_log_filename = str(None)
 _sleep_duration = 0
 _actual_inside_temp = 0
@@ -67,6 +68,75 @@ def log():
     with open(filename, "a") as text_file:
         text_file.write(f"{timestamp},{(str(logline))} \n")
 
+def close_relay():
+    global _actual_heater_status
+    load_relay.on()
+    _actual_heater_status = 1
+    time.sleep_ms(100)
+    log()
+
+def open_relay():
+    global _actual_heater_status
+    load_relay.off()
+    _actual_heater_status = 0
+    time.sleep_ms(100)
+    log()
+
+def go_to_sleep():
+    global _sleep_duration
+    sleeptime = time.time()
+    log()
+    machine.lightsleep(int(SLEEP_MINUTES * 1000 * 60))
+    awaketime = time.time()
+    _sleep_duration = int(awaketime - sleeptime)
+    log()
+    sleeptime = 0
+    awaketime = 0
+
+def off_loop():
+    global _loop_state, _sleep_duration, _actual_inside_temp, _actual_outside_temp, _actual_outside_humi
+    open_relay()
+    while True:
+        ow_sensor_bus.convert_temp()
+        time.sleep_ms(800)
+        _actual_outside_temp, _actual_outside_humi = i2c_sensor.get_CHT8305_TEMPERATURE_HUMIDITY()
+        for UID in ow_sensor_array:
+            _actual_inside_temp = ow_sensor_bus.read_temp(UID)
+        log()
+        _outside_ave.append(_actual_outside_temp)
+        _inside_ave.append(_actual_inside_temp)
+        if (len(_outside_ave)) >= 3 or (len(_inside_ave)) >= 3:
+            outside_mean = int(statistics.fmean(_outside_ave))
+            inside_mean = int(statistics.fmean(_inside_ave))
+            _outside_ave = []
+            _inside_ave = []
+            if (outside_mean <= OUTSIDE_TEMP_LOW) or (inside_mean <= INSIDE_TEMP_LOW):
+                _loop_state = 1
+            else:
+                go_to_sleep()
+        yield 9
+
+def on_loop():
+    global _loop_state, _sleep_duration, _actual_inside_temp, _actual_outside_temp, _actual_outside_humi
+    close_relay()
+    while True:
+        ow_sensor_bus.convert_temp()
+        time.sleep_ms(800)
+        _actual_outside_temp, _actual_outside_humi = i2c_sensor.get_CHT8305_TEMPERATURE_HUMIDITY()
+        for UID in ow_sensor_array:
+            _actual_inside_temp = ow_sensor_bus.read_temp(UID)
+        log()
+        _outside_ave.append(_actual_outside_temp)
+        _inside_ave.append(_actual_inside_temp)
+        if (len(_outside_ave)) >= 3 or (len(_inside_ave)) >= 3:
+            outside_mean = int(statistics.fmean(_outside_ave))
+            inside_mean = int(statistics.fmean(_inside_ave))
+            _outside_ave = []
+            _inside_ave = []
+            if (outside_mean >= OUTSIDE_TEMP_HIGH) or (inside_mean >= INSIDE_TEMP_HIGH):
+                _loop_state = 0
+        yield 30
+
 ### HOUSEKEEPING ###
 # ## WIFI ##
 # wlan.active(False)
@@ -85,27 +155,22 @@ def log():
 #     real_time_clock.datetime(local_time)
 # print(time.localtime())
 
-i = 0
-j = 0
-ow_sensor_bus.convert_temp()
-time.sleep_ms(1000)
-while (i < 10):          
-    while (j < 4):
-        blink_led()
-        for UID in ow_sensor_array:
-            temp_value = ow_sensor_bus.read_temp(UID)
-        Temp, Humi = i2c_sensor.get_CHT8305_TEMPERATURE_HUMIDITY()
-        print(f"Time: {time.localtime()} - OW: {temp_value:.1f}°C - I2C: {Temp:.1f}°C - Humi: {Humi:.1f}%")
-        log()
-        ow_sensor_bus.convert_temp()
-        time.sleep(1)
-        j += 1
-    j = 0
-    load_relay.off()
-    log()
-    # machine.lightsleep(int(SLEEP_MINUTES * 1000 * 60))
-    log()
-    load_relay.on()
-    i += 1
-
 ### MAIN LOOP ###
+state = off_loop()
+current_loop = 0
+while True:
+    try:
+        interval = next(state)
+        time.sleep(interval)
+        if _loop_state != current_loop:
+            current_loop = _loop_state
+            if current_loop == 0:
+                state = off_loop()
+            else:
+                state = on_loop()
+    except KeyboardInterrupt:
+        print("User stopped process.")
+        break
+    except Exception as e:
+        print("Exception during execution of main loop: {}".format(e))
+        break
