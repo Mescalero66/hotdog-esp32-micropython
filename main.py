@@ -2,6 +2,7 @@ import machine, time, ntptime, os
 import esp32, network, onewire, socket
 import ds18x20 as OW_SENSOR
 from machine import Pin, I2C, RTC
+from bluetooth import BLE
 from hardware.CHT8305 import I2C_CHT8305 as I2C_SENSOR
 import hardware.WLAN_KEY as wlan_key
 
@@ -38,10 +39,7 @@ _actual_heater_status = 0
 ### OBJECT SETUP ###
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
-wlan.config(txpower=8)
-wlan.PM_NONE
-# wlan.ifconfig(('192.168.1.19','255.255.255.0','192.168.1.1', '192.168.1.1'))
-wlan.config(reconnects=-1)
+ble = BLE()
 led = Pin(BLUE_LED, Pin.OUT)
 load_relay = Pin(LOAD_RELAY_PIN, Pin.OUT)
 load_relay.off()
@@ -55,6 +53,15 @@ def blink_led():
     led.off()
     time.sleep_ms(100)
     led.on()
+
+def power_spike():
+    ble.active(True)
+    adv_payload = bytes([0x02, 0x01, 0x06])
+    interval_us = 20000
+    ble.gap_advertise(interval_us, adv_payload, connectable=False)
+    time.sleep_ms(100)
+    ble.gap_advertise(0, adv_payload, connectable=False)
+    ble.active(False)
 
 def connect_wifi(timeout=10):
     wlan = network.WLAN(network.STA_IF)
@@ -116,6 +123,7 @@ def cleanup_old_logs():
         print(f"Deleted old log: {oldest}")
 
 def log():
+    power_spike()
     filename, timestamp = create_daily_log_file()
     if filename.startswith("hotdog_2000"):
         return
@@ -204,6 +212,10 @@ def on_loop():
 wlan.active(False)
 wlan.active(True)
 if not wlan.isconnected():
+    wlan.config(txpower=8)
+    wlan.PM_NONE
+    # wlan.ifconfig(('192.168.1.19','255.255.255.0','192.168.1.1', '192.168.1.1'))
+    wlan.config(reconnects=-1)
     print('connecting to network:', WIFI_SSID)
     wlan.connect(WIFI_SSID, WIFI_PW)
     while not wlan.isconnected():
